@@ -1,8 +1,8 @@
 # NOTE: this file is rendered by Terraform via templatefile() before being
-# applied -- the ${git_repo_url} below is a Terraform interpolation, not
+# applied -- the $${git_repo_url} below is a Terraform interpolation, not
 # valid YAML on its own. See git-repo-and-appsets.tf. It does not collide
 # with ArgoCD's own {{.name}}/{{.server}} Go-template syntax used further
-# down, since Terraform only substitutes ${...} expressions.
+# down, since Terraform only substitutes $${...} expressions.
 #
 # Installs ArgoCD (argo-helm/argo-cd @ 7.7.9) onto every registered spoke
 # cluster. Lives on the MANAGEMENT cluster's ArgoCD (this is what pushes the
@@ -47,12 +47,9 @@ spec:
     metadata:
       name: "argocd-{{.name}}"
       annotations:
-        {{- $parts := splitList "-" (trimPrefix "dvb-argocd-" .name) }}
         argo.octopus.com/project: "ArgoCD Management"
-        argo.octopus.com/environment: {{ index $parts 0 | quote }}
-        {{- if gt (len $parts) 1 }}
-        argo.octopus.com/tenant: {{ index $parts 1 | quote }}
-        {{- end }}
+        argo.octopus.com/environment: '{{ index (splitList "-" (trimPrefix "dvb-argocd-" .name)) 0 }}'
+        argo.octopus.com/tenant: '{{ $parts := splitList "-" (trimPrefix "dvb-argocd-" .name) }}{{ if gt (len $parts) 1 }}{{ index $parts 1 }}{{ end }}'
     spec:
       project: default
       # Multi-source Application: the Helm chart installs ArgoCD, and the
@@ -63,7 +60,7 @@ spec:
       sources:
         - repoURL: https://argoproj.github.io/argo-helm
           chart: argo-cd
-          targetRevision: {{ .targetRevision | quote }}
+          targetRevision: '{{ .targetRevision }}'
           helm:
             releaseName: argocd
             valuesObject:

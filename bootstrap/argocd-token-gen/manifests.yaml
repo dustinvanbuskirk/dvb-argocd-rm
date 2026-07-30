@@ -1,0 +1,140 @@
+# Add these to a git path your ArgoCD instances can reach (e.g.
+# bootstrap/argocd-token-gen/ in whatever repo backs your Applications).
+# Referenced as a second source in argocd-spoke-install-appset.yaml below.
+#
+# The Job carries the PostSync hook annotation, so ArgoCD runs it
+# automatically right after the argo-cd Helm chart syncs on each cluster --
+# no Terraform, no manual per-cluster step. It's idempotent (skips if the
+# secret already exists), matching the check your original Job did.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-token-gen
+  namespace: argocd
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-token-gen
+  namespace: argocd
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-token-gen
+  namespace: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argocd-token-gen
+subjects:
+  - kind: ServiceAccount
+    name: argocd-token-gen
+    namespace: argocd
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: argocd-gateway-token-gen
+  namespace: argocd
+  annotations:
+    # Runs automatically after this Application's Sync phase completes.
+    argocd.argoproj.io/hook: PostSync
+    # Cleans itself up once it succeeds, so re-syncs don't pile up old Jobs.
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        job: argocd-gateway-token-gen
+    spec:
+      restartPolicy: Never
+      serviceAccountName: argocd-token-gen
+
+      initContainers:
+        - name: check-secret
+          image: docker.io/dustinvanbuskirk/argocd-token-gen:v2.9.0
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              if kubectl get secret argocd-gateway-token -n argocd > /dev/null 2>&1; then
+                echo "==> argocd-gateway-token already exists, nothing to do."
+                touch /tmp/skip
+              else
+                echo "==> argocd-gateway-token not found, proceeding with token generation."
+              fi
+          volumeMounts:
+            - name: shared
+              mountPath: /tmp
+
+      containers:
+        - name: token-gen
+          image: docker.io/dustinvanbuskirk/argocd-token-gen:v2.9.0
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+
+              if [ -f /tmp/skip ]; then
+                echo "==> Secret already exists, skipping."
+                exit 0
+              fi
+
+              ARGOCD_SERVER="argocd-server.argocd.svc.cluster.local:80"
+              ARGOCD_PASSWORD=$(cat /argocd-admin-secret/password)
+
+              echo "==> Patching argocd-cm to enable apiKey for admin..."
+              kubectl patch configmap argocd-cm -n argocd --type merge \
+                -p '{"data":{"accounts.admin":"apiKey, login"}}'
+
+              echo "==> Waiting for ArgoCD to reload config (20s)..."
+              sleep 20
+
+              echo "==> Verifying ArgoCD server is reachable..."
+              curl -sf --max-time 10 "http://$ARGOCD_SERVER/healthz" \
+                || curl -sfk --max-time 10 "https://$ARGOCD_SERVER/healthz" \
+                || { echo "ERROR: ArgoCD server not reachable on port 80"; exit 1; }
+
+              echo "==> Logging into ArgoCD..."
+              argocd login "$ARGOCD_SERVER" \
+                --username admin \
+                --password "$ARGOCD_PASSWORD" \
+                --plaintext \
+                --insecure
+
+              echo "==> Generating token for admin account..."
+              GATEWAY_TOKEN=$(argocd account generate-token \
+                --server "$ARGOCD_SERVER" \
+                --plaintext \
+                --insecure)
+
+              if [ -z "$GATEWAY_TOKEN" ]; then
+                echo "ERROR: token empty"
+                exit 1
+              fi
+
+              echo "==> Storing secret via kubectl..."
+              kubectl create secret generic argocd-gateway-token \
+                -n argocd \
+                --from-literal=token="$GATEWAY_TOKEN"
+
+              echo "==> Done."
+          volumeMounts:
+            - name: argocd-admin-secret
+              mountPath: /argocd-admin-secret
+              readOnly: true
+            - name: shared
+              mountPath: /tmp
+
+      volumes:
+        - name: argocd-admin-secret
+          secret:
+            secretName: argocd-initial-admin-secret
+        - name: shared
+          emptyDir: {}

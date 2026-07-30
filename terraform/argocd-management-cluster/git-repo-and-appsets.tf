@@ -31,3 +31,36 @@ resource "kubernetes_secret" "argocd_repo_credentials" {
 
   depends_on = [helm_release.argocd]
 }
+
+# Renders the ApplicationSet template with git_repo_url substituted in, and
+# writes the result alongside the template so it's easy to inspect what
+# actually got applied (this rendered file is gitignore'd -- it's a build
+# artifact, not something to commit; re-running terraform apply overwrites
+# it in place).
+resource "local_file" "argocd_appset_rendered" {
+  filename = "${path.module}/argocd-appset.rendered.yaml"
+  content = templatefile("${path.module}/argocd-appset.yaml.tpl", {
+    git_repo_url = var.git_repo_url
+  })
+}
+
+# Applies the rendered ApplicationSet to the management cluster. Uses
+# local-exec + kubectl rather than kubernetes_manifest, since kubernetes_manifest
+# needs the ApplicationSet CRD's schema available at plan time, which doesn't
+# exist until helm_release.argocd has already applied -- a chicken-and-egg
+# problem this sidesteps entirely.
+resource "null_resource" "apply_argocd_appset" {
+  triggers = {
+    rendered_hash = sha256(local_file.argocd_appset_rendered.content)
+  }
+
+  provisioner "local-exec" {
+    command = "kubectl --kubeconfig=${var.kubeconfig_path} apply -f ${local_file.argocd_appset_rendered.filename}"
+  }
+
+  depends_on = [
+    helm_release.argocd,
+    kubernetes_secret.argocd_repo_credentials,
+    local_file.argocd_appset_rendered,
+  ]
+}
