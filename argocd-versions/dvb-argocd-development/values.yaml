@@ -1,10 +1,41 @@
-# Read by argocd-spoke-install-appset.yaml's git files generator for this
-# specific cluster (path: argocd-versions/<cluster-name>/values.yaml).
+# Default values for every cluster deploying this chart. Per-cluster
+# overrides live in argocd-versions/<cluster-name>/values.yaml at the repo
+# root, layered on top of this file via the ApplicationSet's valueFiles.
 #
-# This file, not the ApplicationSet or the live Application, is what should
-# get edited to promote a new ArgoCD chart version to this cluster -- e.g.
-# via Octopus's "Update Argo CD Application Manifests" step, or a plain PR.
-# Editing the ApplicationSet's hardcoded value would affect every cluster
-# at once and defeats the point of this file existing.
+# meta.chartVersion is the documented, single-source-of-truth version this
+# chart wraps -- but Helm has no live mechanism to read this at dependency-
+# resolution time. Chart.yaml's dependencies[0].version is what Helm
+# actually installs. If you bump meta.chartVersion here, also run
+# ./sync-chart-version.sh to update Chart.yaml and regenerate the lockfile
+# to match -- otherwise this field is documentation only and Helm will keep
+# installing whatever Chart.yaml says.
+meta:
+  chartVersion: "9.5.16"
 
-targetRevision: "7.7.9"
+# Values below are passed to the argo-cd subchart (nested under its
+# dependency name, per Helm convention) -- same values previously inlined
+# directly in the ApplicationSet template.
+argo-cd:
+  global:
+    domain: argocd.local
+  server:
+    replicas: 1
+    service:
+      type: NodePort
+    ingress:
+      enabled: false
+    extraArgs:
+      - --insecure
+    metrics:
+      enabled: false
+  configs:
+    params:
+      server.insecure: "true"
+  redis-ha:
+    enabled: false
+  controller:
+    replicas: 1
+  repoServer:
+    replicas: 1
+  applicationSet:
+    replicas: 1
