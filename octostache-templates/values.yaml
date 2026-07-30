@@ -1,0 +1,27 @@
+# Helm values for this cluster's argo-cd dependency. Normal git-committed
+# file -- not touched by Octopus's manifest step, unlike Chart.yaml in
+# this same folder. Edit directly (PR, etc.) to change per-cluster values.
+argo-cd:
+  global:
+    domain: argocd.local
+  server:
+    replicas: 1
+    service:
+      type: NodePort
+    ingress:
+      enabled: false
+    extraArgs:
+      - --insecure
+    metrics:
+      enabled: false
+  configs:
+    params:
+      server.insecure: "true"
+  redis-ha:
+    enabled: false
+  controller:
+    replicas: 1
+  repoServer:
+    replicas: 1
+  applicationSet:
+    replicas: 1

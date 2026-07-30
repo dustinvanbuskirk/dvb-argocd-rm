@@ -1,0 +1,22 @@
+apiVersion: v2
+name: dvb-argocd-umbrella
+description: >-
+  Per-cluster umbrella chart wrapping the upstream argo-cd chart, plus a
+  local dependency on charts/argocd-token-gen for the bootstrap RBAC +
+  PostSync hook Job (shared across all clusters, not duplicated). This
+  file itself is an Octostache template -- Octopus's "Update Argo CD
+  Application Manifests" step renders it and overwrites each cluster's
+  actual Chart.yaml, substituting the argo-cd dependency version only.
+  The argocd-token-gen dependency stays static -- its version isn't
+  driven by Octopus, since it isn't the thing being promoted.
+type: application
+appVersion: "#{ArgoCDChartVersion}"
+version: 0.1.0
+
+dependencies:
+  - name: argo-cd
+    version: "#{ArgoCDChartVersion}"
+    repository: https://argoproj.github.io/argo-helm
+  - name: argocd-token-gen
+    version: "0.1.0"
+    repository: "file://../../charts/argocd-token-gen"
