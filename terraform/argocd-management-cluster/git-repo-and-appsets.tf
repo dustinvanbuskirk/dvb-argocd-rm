@@ -55,14 +55,7 @@ resource "null_resource" "apply_argocd_appset" {
   }
 
   provisioner "local-exec" {
-    # --validate=false works around a known ArgoCD gap: the ApplicationSet
-    # CRD's embedded copy of the Application schema for
-    # spec.template.spec.sources[] doesn't include the `name` field on
-    # some ArgoCD/chart versions, even though the ApplicationSet
-    # controller's actual code fully supports it when generating the real
-    # Application objects. Without this flag, kubectl's strict schema
-    # validation rejects the ApplicationSet before it's ever created.
-    command = "kubectl --kubeconfig=${var.kubeconfig_path} apply --validate=false -f ${local_file.argocd_appset_rendered.filename}"
+    command = "kubectl --kubeconfig=${var.kubeconfig_path} apply -f ${local_file.argocd_appset_rendered.filename}"
   }
 
   depends_on = [

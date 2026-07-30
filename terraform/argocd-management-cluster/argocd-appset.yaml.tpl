@@ -6,14 +6,27 @@
 #
 # Installs ArgoCD via a per-cluster umbrella chart at
 # argocd-versions/<cluster-name>/ in this same repo -- each cluster has its
-# own Chart.yaml (dependency version) and values.yaml (Helm values).
-# Chart.yaml is what Octopus's "Update Argo CD Application Manifests" step
-# overwrites on deployment, via an Octostache template (see
-# octostache-templates/Chart.yaml), to change the pinned argo-cd dependency
-# version -- values.yaml is a normal git-committed file, not templated.
-# Lives on the MANAGEMENT cluster's ArgoCD (this is what pushes the chart
-# out to each spoke) -- it does not touch the management cluster's own
-# ArgoCD, which stays installed via Terraform's helm_release.argocd.
+# own Chart.yaml (dependencies: argo-cd + a local file:// dependency on
+# charts/argocd-token-gen, the shared bootstrap RBAC + PostSync hook Job)
+# and values.yaml (Helm values, argo-cd only). Chart.yaml is what Octopus's
+# "Update Argo CD Application Manifests" step overwrites on deployment, via
+# an Octostache template (see octostache-templates/Chart.yaml), to change
+# the pinned argo-cd dependency version -- values.yaml is a normal
+# git-committed file, not templated. Lives on the MANAGEMENT cluster's
+# ArgoCD (this is what pushes the chart out to each spoke) -- it does not
+# touch the management cluster's own ArgoCD, which stays installed via
+# Terraform's helm_release.argocd.
+#
+# SINGLE SOURCE, NOT MULTI-SOURCE: an earlier version of this file used a
+# second Application source for the bootstrap Job, which required naming
+# that source (per https://octopus.com/docs/argo-cd/annotations#multiple-sources)
+# -- but the ApplicationSet CRD's embedded copy of the Application schema
+# doesn't include sources[].name on the ArgoCD version this repo installs,
+# so the API server silently pruned that field on every apply, and the
+# generated Applications never actually got a named source no matter what
+# the template said. The token-gen Job is now a local Helm dependency
+# instead (see charts/argocd-token-gen/), so it deploys as part of the same
+# single source with no second source needed at all.
 #
 # Selector: matches only cluster secrets carrying an "env" label. That's the
 # label set on the spoke cluster secrets (see kubernetes_secret.argocd_cluster
@@ -40,13 +53,10 @@ spec:
     metadata:
       name: "argocd-{{.name}}"
       annotations:
-        # Multi-source Application: Octopus's scoping annotations must be
-        # suffixed with the target source's name (see
-        # https://octopus.com/docs/argo-cd/annotations#multiple-sources).
-        # Only the umbrella-chart source (name: argocd-chart-source) is
-        # scoped -- that's the only source Octopus's "Update Argo CD
-        # Application Manifests" step needs to write into. The bootstrap
-        # source is left unnamed/unannotated since Octopus never touches it.
+        # Single source now -- per
+        # https://octopus.com/docs/argo-cd/annotations#single-source,
+        # unscoped (unsuffixed) annotations are correct here; no source
+        # name needed or used.
         #
         # Values must be Octopus SLUGS, not display names -- confirm
         # "argocd-management" matches your actual Octopus project's slug
@@ -54,27 +64,17 @@ spec:
         # slug below matches what Octopus generated for your Environments
         # (e.g. a "Production" environment's slug may not be "production"
         # if it was renamed after creation).
-        argo.octopus.com/project.argocd-chart-source: "argocd-management"
-        argo.octopus.com/environment.argocd-chart-source: '{{ index (splitList "-" (trimPrefix "dvb-argocd-" .name)) 0 }}'
-        argo.octopus.com/tenant.argocd-chart-source: '{{ $parts := splitList "-" (trimPrefix "dvb-argocd-" .name) }}{{ if gt (len $parts) 1 }}{{ index $parts 1 }}{{ end }}'
+        argo.octopus.com/project: "argocd-management"
+        argo.octopus.com/environment: '{{ index (splitList "-" (trimPrefix "dvb-argocd-" .name)) 0 }}'
+        argo.octopus.com/tenant: '{{ $parts := splitList "-" (trimPrefix "dvb-argocd-" .name) }}{{ if gt (len $parts) 1 }}{{ index $parts 1 }}{{ end }}'
     spec:
       project: default
-      # Two-source Application: source 1 installs this cluster's own
-      # umbrella chart (folder name = cluster name, so each Application
-      # gets a distinct path) and is named so Octopus's scoping annotations
-      # above can target it specifically; source 2 deploys the RBAC +
-      # PostSync hook Job that generates the gateway token right after
-      # ArgoCD comes up, and is left unnamed since Octopus never writes to it.
-      sources:
-        - repoURL: ${git_repo_url}
-          path: "argocd-versions/{{.name}}"
-          targetRevision: main
-          name: argocd-chart-source
-          helm:
-            releaseName: argocd
-        - repoURL: ${git_repo_url}
-          targetRevision: main
-          path: bootstrap/argocd-token-gen
+      source:
+        repoURL: ${git_repo_url}
+        path: "argocd-versions/{{.name}}"
+        targetRevision: main
+        helm:
+          releaseName: argocd
       destination:
         server: "{{.server}}"
         namespace: argocd

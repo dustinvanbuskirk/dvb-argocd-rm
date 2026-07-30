@@ -1,0 +1,9 @@
+apiVersion: v2
+name: argocd-token-gen
+description: >-
+  RBAC + PostSync hook Job that generates the ArgoCD gateway API token on
+  whatever cluster this chart is deployed to. Referenced as a local file://
+  dependency from each cluster's umbrella chart in argocd-versions/ --
+  shared once here instead of duplicated per cluster.
+type: application
+version: 0.1.0

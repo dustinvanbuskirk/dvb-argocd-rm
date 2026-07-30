@@ -1,0 +1,2 @@
+# Nothing to parameterize -- all resources in templates/ are static. This
+# file exists only because it's conventional for a Helm chart to have one.

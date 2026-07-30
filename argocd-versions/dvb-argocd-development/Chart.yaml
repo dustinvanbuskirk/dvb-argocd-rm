@@ -1,17 +1,22 @@
 apiVersion: v2
 name: dvb-argocd-umbrella
 description: >-
-  Per-cluster umbrella chart wrapping the upstream argo-cd chart. This
-  file's dependency version is overwritten by Octopus's "Update Argo CD
+  Per-cluster umbrella chart wrapping the upstream argo-cd chart, plus a
+  local dependency on charts/argocd-token-gen for the bootstrap RBAC +
+  PostSync hook Job (shared across all clusters, not duplicated). The
+  argo-cd dependency's version is overwritten by Octopus's "Update Argo CD
   Application Manifests" step on deployment (see
-  octostache-templates/Chart.yaml) -- don't hand-edit the version here
+  octostache-templates/Chart.yaml) -- don't hand-edit that version here
   expecting it to stick; edit via Octopus instead. values.yaml in this
   same folder is a normal git-committed file, not templated.
 type: application
-version: 0.1.0
 appVersion: "9.5.16"
+version: 0.1.0
 
 dependencies:
   - name: argo-cd
     version: "9.5.16"
     repository: https://argoproj.github.io/argo-helm
+  - name: argocd-token-gen
+    version: "0.1.0"
+    repository: "file://../../charts/argocd-token-gen"
