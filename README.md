@@ -2,12 +2,15 @@
 
 A homelab hub-and-spoke ArgoCD platform: six Vagrant-provisioned Kubernetes
 clusters (one management "hub" + five spokes), wired together with
-Terraform, ArgoCD ApplicationSets, and Octopus Deploy.
+Terraform, an ArgoCD ApplicationSet, per-cluster Helm umbrella charts, and
+Octopus Deploy driving version promotion.
 
 The management cluster runs ArgoCD and the Octopus ArgoCD Gateway. From
 there, an ApplicationSet installs ArgoCD onto each spoke cluster
-automatically, using a Git-driven per-cluster chart-version file so each
-environment can be promoted independently.
+automatically. Each spoke's ArgoCD chart version is promoted through
+Octopus's own release/environment process, via its "Update Argo CD
+Application Manifests" step -- not by hand-editing files or running
+scripts.
 
 ## Architecture
 
@@ -48,6 +51,7 @@ flowchart TB
     Gateway <-- "auth token" --> ArgoHub
     Worker <-- "polling" --> Octopus
     Agent <-- "polling" --> Octopus
+    Octopus -- "Update Application Manifests step" --> ArgoHub
 ```
 
 Two distinct mechanisms both involve "spokes," worth keeping straight:
@@ -55,13 +59,13 @@ Two distinct mechanisms both involve "spokes," worth keeping straight:
 | Mechanism | Where it's defined | What it does |
 |---|---|---|
 | Cluster registration | `terraform/argocd-management-cluster/spoke-clusters.tf` + `modules/argocd-spoke-registration/` | Registers each spoke as an ArgoCD **Cluster** secret on the hub, so the hub's ArgoCD *knows about and can reach* each spoke's API server. |
-| Spoke ArgoCD install | `terraform/argocd-management-cluster/argocd-appset.yaml.tpl` | An **ApplicationSet** that uses those registered clusters to *install ArgoCD itself* onto every spoke. |
+| Spoke ArgoCD install | `terraform/argocd-management-cluster/argocd-appset.yaml.tpl` | An **ApplicationSet** that uses those registered clusters to *install ArgoCD itself* onto every spoke, via each cluster's own umbrella chart in `argocd-versions/`. |
 
 ## Network topology
 
 All six clusters share a single `10.20.0.0/16` private network (one
 VirtualBox host-only adapter, `netmask: 255.255.0.0`), so any node in any
-cluster can reach any other cluster's API server directly — no static
+cluster can reach any other cluster's API server directly -- no static
 routes needed. Each cluster gets its own `/24` slice:
 
 ```mermaid
@@ -84,15 +88,29 @@ Each control-plane node gets `.11` in its `/24`; workers start at `.21`.
 .
 ├── Vagrantfile                        # Provisions all 6 clusters
 ├── Generate-RemoteKubeconfig.ps1
-├── argocd-versions/                   # Per-cluster ArgoCD chart version pins
-│   ├── dvb-argocd-development/values.yaml
-│   ├── dvb-argocd-staging/values.yaml
-│   ├── dvb-argocd-production-east/values.yaml
-│   ├── dvb-argocd-production-central/values.yaml
-│   └── dvb-argocd-production-west/values.yaml
-├── bootstrap/
-│   └── argocd-token-gen/
-│       └── manifests.yaml             # RBAC + PostSync Job, fetched by each spoke
+├── charts/
+│   └── argocd-token-gen/              # Shared local Helm dependency:
+│       ├── Chart.yaml                 # RBAC + PostSync hook Job that
+│       ├── values.yaml                # generates the ArgoCD gateway
+│       └── templates/                 # token on whatever cluster
+│           ├── serviceaccount.yaml    # this chart is deployed to.
+│           ├── role.yaml              # Referenced by every cluster's
+│           ├── rolebinding.yaml       # umbrella chart as a local
+│           └── job.yaml               # file:// dependency.
+├── argocd-versions/                   # One umbrella chart per spoke
+│   ├── dvb-argocd-development/
+│   │   ├── Chart.yaml                 # Pins the argo-cd chart version --
+│   │   │                              # overwritten by Octopus on deploy
+│   │   └── values.yaml                # Helm values for argo-cd (static,
+│   │                                  # git-committed, not templated)
+│   ├── dvb-argocd-staging/
+│   ├── dvb-argocd-production-east/
+│   ├── dvb-argocd-production-central/
+│   └── dvb-argocd-production-west/
+├── octostache-templates/
+│   └── Chart.yaml                     # Octostache template Octopus
+│                                       # renders and writes into each
+│                                       # cluster's own Chart.yaml above
 └── terraform/
     └── argocd-management-cluster/     # Terraform root for the hub cluster
         ├── argocd.tf                  # Installs ArgoCD on the hub via Helm
@@ -112,17 +130,23 @@ Each control-plane node gets `.11` in its `/24`; workers start at `.21`.
         └── terraform.tfvars.example
 ```
 
+`bootstrap/argocd-token-gen/manifests.yaml`, if still present, is no
+longer used -- the RBAC/Job it held now lives once in
+`charts/argocd-token-gen/` and gets pulled in as a Helm dependency by
+every cluster instead of being referenced as a second Application source.
+Safe to delete.
+
 ## Host machine setup (Windows NUC)
 
 This runs on a single Windows 11 box: VirtualBox/Vagrant manage the VMs
-directly from Windows, while Terraform/kubectl/git are typically run from
-inside WSL2 against the repo checked out on the Windows filesystem (this
-is the pattern used throughout this README and its command examples).
+directly from Windows (run from **PowerShell**), while Terraform/kubectl/git
+run from **WSL2** against the repo checked out on the Windows filesystem
+(this is the pattern the command examples below assume).
 
 ### 1. Enable virtualization in BIOS/UEFI
 
 Confirm Intel VT-x (or AMD-V) is enabled in the NUC's BIOS/UEFI before
-installing anything below — both VirtualBox and WSL2 need it, and it's
+installing anything below -- both VirtualBox and WSL2 need it, and it's
 off by default on some NUC firmware.
 
 ### 2. Install Chocolatey
@@ -154,6 +178,7 @@ choco install git -y
 | Terraform | `terraform` | **1.3+** | `optional()` in `variables.tf`'s `spoke_clusters` type requires it |
 | kubectl | `kubernetes-cli` | any recent | Cluster access, kubeconfig merging |
 | Git | `git` | any recent | Cloning your fork, pushing `argocd-versions/` changes |
+| Helm | `kubernetes-helm` | 3.8+ | Local dependency resolution (`helm dependency update`) for the umbrella charts |
 
 A reboot after installing VirtualBox is recommended before first use.
 
@@ -167,7 +192,7 @@ Reboots when prompted, enables the "Virtual Machine Platform" and
 "Windows Subsystem for Linux" Windows features, sets WSL2 as the default
 version, and installs Ubuntu.
 
-Inside the new Ubuntu shell, install matching Terraform/kubectl so
+Inside the new Ubuntu shell, install matching Terraform/kubectl/helm so
 commands behave identically whether run from PowerShell or WSL:
 
 ```bash
@@ -182,21 +207,23 @@ sudo apt update && sudo apt install -y terraform
 # kubectl
 curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
 sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+# helm
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 ```
 
-Your Windows filesystem is reachable from WSL under `/mnt/c/...` — e.g. a
+Your Windows filesystem is reachable from WSL under `/mnt/c/...` -- e.g. a
 repo cloned to `C:\Users\<you>\src\dvb-argocd-rm` shows up at
 `/mnt/c/Users/<you>/src/dvb-argocd-rm`. Run `vagrant`/`VBoxManage` commands
 from PowerShell (VirtualBox VM management doesn't work from inside WSL),
-and run `terraform`/`kubectl`/`git` from either shell against that same
-path — WSL is what the command examples elsewhere in this README assume.
+and run `terraform`/`kubectl`/`git`/`helm` from WSL against that same path.
 
 ### 5. VirtualBox and WSL2 on the same machine
 
 These two used to conflict outright (WSL2 requires Hyper-V; older
 VirtualBox versions required exclusive access to VT-x). VirtualBox 6.1.18+
 can run alongside Hyper-V/WSL2 using the Windows Hypervisor Platform
-(WHPX) as its acceleration backend instead — Oracle still documents this
+(WHPX) as its acceleration backend instead -- Oracle still documents this
 as "experimental," but it's the expected way to run both today, and no
 `bcdedit` changes should be needed.
 
@@ -210,6 +237,9 @@ setting is fighting with it.
 
 - An Octopus Deploy instance and API key
 - A fork of this repository, plus a GitHub personal access token (repo scope)
+- A git credential configured in Octopus (Infrastructure -> Git
+  Credentials) for this repo -- required before the "Update Argo CD
+  Application Manifests" step will run
 
 ## Setup
 
@@ -231,18 +261,14 @@ Resource note: all 6 clusters at once is 24 vCPU / ~48GB RAM at the
 defaults (`CONTROL_PLANE_CPUS`/`MEMORY`, `WORKER_CPUS`/`MEMORY` env vars
 override this).
 
-This writes, per cluster, to the project root:
-
-- `<cluster>-kubeconfig` — raw kubeconfig for that cluster
-- `kubeconfigs/<cluster>.conf` — renamed export (cluster/user/context
-  renamed from kubeadm's generic defaults, used for cross-cluster access)
-- `join-commands/`, `worker-tracking/`, `logs/` — per-cluster provisioning
-  state
+This writes, per cluster, to the project root: `<cluster>-kubeconfig`
+(raw), `kubeconfigs/<cluster>.conf` (renamed export, used for cross-cluster
+access), plus `join-commands/`, `worker-tracking/`, `logs/`.
 
 ### 2. Fork this repo
 
 The only two things that change per fork are `git_repo_url` and
-`github_api_token` in `terraform.tfvars` — nothing else in this project
+`github_api_token` in `terraform.tfvars` -- nothing else in this project
 needs hand-editing to point at a fork.
 
 ### 3. Configure Terraform
@@ -255,7 +281,7 @@ cp terraform.tfvars.example terraform.tfvars
 Fill in `terraform.tfvars`: Octopus connection details, `kubeconfig_path`
 for the management cluster, `spoke_clusters` (paths to each spoke's
 `kubeconfigs/<cluster>.conf` and its renamed context), and `git_repo_url` /
-`github_api_token` for your fork.
+`github_username` / `github_api_token` for your fork.
 
 ### 4. Apply
 
@@ -268,6 +294,29 @@ This installs ArgoCD + the Octopus Gateway/Worker/Agent on the management
 cluster, registers each spoke cluster as an ArgoCD Cluster secret, creates
 a Git repository credential Secret for your fork, and renders + applies
 `argocd-appset.yaml.tpl` to the management cluster's ArgoCD.
+
+### 5. Configure the Octopus deployment process
+
+In your Octopus project, add an **Update Argo CD Application Manifests**
+step:
+
+- Template source: this git repo (your fork), branch `main`
+- Path to templates: `octostache-templates` (a directory -- both
+  `octostache-templates` and `octostache-templates/**/*` glob patterns get
+  generated automatically)
+- A **git credential** for this repo must exist in Octopus first, or the
+  step fails outright before doing anything
+
+Then define `#{ArgoCDChartVersion}` as a project variable, scoped per
+Environment (and Tenant, for the three regional production clusters) so
+promoting a release through your normal Octopus lifecycle is what changes
+the deployed ArgoCD version per cluster.
+
+**Important:** Octopus releases pin an exact git commit at creation time.
+If you change files in this repo (`octostache-templates/`, etc.) *after*
+creating a release, that release keeps pointing at the old commit --
+create a new release to pick up repo changes, don't try to redeploy an
+existing one.
 
 ## How a spoke gets ArgoCD installed
 
@@ -282,49 +331,70 @@ sequenceDiagram
     You->>TF: terraform apply
     TF->>TF: templatefile(argocd-appset.yaml.tpl, git_repo_url)
     TF->>Hub: kubectl apply argocd-appset.rendered.yaml
-    Hub->>Hub: matrix generator: clusters x git files
-    Hub->>Git: read argocd-versions/<cluster>/values.yaml
-    Hub->>Hub: generate one Application per matched spoke
-    Hub->>Spoke: source 1 - install argo-cd Helm chart
-    Hub->>Git: source 2 - fetch bootstrap/argocd-token-gen
-    Hub->>Spoke: apply RBAC + PostSync Job
-    Spoke->>Spoke: Job generates ArgoCD API token, stores as Secret
+    Hub->>Hub: clusters generator matches each registered spoke
+    Hub->>Hub: generate one single-source Application per spoke
+    Hub->>Git: source: argocd-versions/<cluster-name>
+    Git-->>Hub: Chart.yaml (argo-cd + local argocd-token-gen deps), values.yaml
+    Hub->>Hub: helm dependency build (resolves both deps)
+    Hub->>Spoke: install argo-cd chart + argocd-token-gen chart together
+    Spoke->>Spoke: PostSync hook Job generates ArgoCD API token, stores as Secret
 ```
 
-The `ApplicationSet`'s cluster generator only matches cluster secrets
+The ApplicationSet's cluster generator only matches cluster secrets
 carrying an `env` label (set when each spoke is registered), which
-naturally excludes ArgoCD's implicit `in-cluster` entry.
+naturally excludes ArgoCD's implicit `in-cluster` entry. Each generated
+Application uses a **single** Helm source pointing at
+`argocd-versions/<cluster-name>` -- the `argo-cd` chart and the shared
+`charts/argocd-token-gen` bootstrap Job are both pulled in as Helm
+dependencies of that same source, not as separate Application sources.
 
-## Promoting an ArgoCD version to a spoke
+## How an ArgoCD version gets promoted to a spoke
 
-Each spoke's ArgoCD chart version comes from
-`argocd-versions/<cluster-name>/values.yaml` — a single
-`targetRevision: "x.y.z"` field. Edit that file (via PR, or Octopus's
-"Update Argo CD Application Manifests" step) and push; the generated
-Application picks it up on its next sync. **Don't** edit
-`argocd-appset.yaml.tpl` or the live `Application` object directly for
-this — the ApplicationSet controller will just overwrite the latter back
-to whatever the template says.
+```mermaid
+sequenceDiagram
+    participant Op as Octopus release
+    participant Tpl as octostache-templates/Chart.yaml
+    participant Git as Your Git fork
+    participant Hub as Hub ArgoCD
+    participant Spoke as Spoke cluster
 
-If a cluster's `values.yaml` is missing or its path doesn't match that
-cluster's name exactly, that cluster is silently skipped — no error, no
-Application generated for it.
+    Op->>Tpl: render with #{ArgoCDChartVersion} (env/tenant-scoped variable)
+    Op->>Git: write rendered Chart.yaml into argocd-versions/<cluster>/
+    Op->>Hub: trigger sync via Octopus ArgoCD Gateway
+    Hub->>Git: pull updated Chart.yaml
+    Hub->>Hub: helm dependency build re-resolves argo-cd@<new version>
+    Hub->>Spoke: sync updated argo-cd chart version
+```
+
+Octopus's "Update Argo CD Application Manifests" step matches Applications
+by scoping annotations (`argo.octopus.com/project`, `.../environment`,
+`.../tenant`), not by name -- it writes the rendered template into
+whichever Application's source path those annotations point at. Only
+`Chart.yaml`'s `argo-cd` dependency version is templated; the local
+`argocd-token-gen` dependency and `values.yaml` are static, git-committed
+files, edited directly (PR, etc.) rather than through Octopus.
 
 ## Octopus scoping annotations
 
-Every spoke's generated Application carries annotations Octopus uses to
-tie it to a Project/Environment/Tenant on its dashboard:
+Every spoke's generated Application carries annotations tying it to a
+Project/Environment/Tenant in Octopus:
 
 | Annotation | Value | Derived from |
 |---|---|---|
-| `argo.octopus.com/project` | `ArgoCD Management` | Fixed |
+| `argo.octopus.com/project` | `argocd-management` (a **slug**, not display name) | Fixed |
 | `argo.octopus.com/environment` | e.g. `development`, `production` | First segment of the cluster name after stripping `dvb-argocd-` |
-| `argo.octopus.com/tenant` | e.g. `east`, or empty | Second segment, if present (regional production clusters only) |
+| `argo.octopus.com/tenant` | e.g. `east`, or empty string | Second segment, if present (regional production clusters only) |
 
-`dvb-argocd-production-east` → environment `production`, tenant `east`.
-`dvb-argocd-development` → environment `development`, tenant absent
-(annotation present but empty, not omitted — a constraint of how
-ArgoCD's `goTemplate` engine renders values, not a choice).
+`dvb-argocd-production-east` -> environment `production`, tenant `east`.
+`dvb-argocd-development` -> environment `development`, tenant present but
+empty (an empty-string annotation, not an omitted one -- a constraint of
+how ArgoCD's `goTemplate` engine renders values, not a choice).
+
+These are **unscoped** (no `.<source-name>` suffix) because each
+Application now has a single source -- confirm the values above actually
+match your real Octopus project/environment/tenant **slugs** (visible in
+each one's URL/Settings), not their display names; slugs don't always
+follow the obvious lowercase-hyphenate pattern, especially after a rename.
 
 ## Getting cross-cluster `kubectl` access
 
@@ -344,21 +414,37 @@ kubectl config use-context dvb-argocd-production-east
 ## Common pitfalls (learned the hard way)
 
 - **`templatefile()` treats every `${...}` as a real interpolation, even
-  inside a comment.** Illustrative uses of that syntax in the `.tpl` file's
-  own header comments have to be escaped as `$${...}`.
+  inside a comment.** Illustrative uses of that syntax in `.tpl` file
+  comments have to be escaped as `$${...}`.
 - **ArgoCD's `goTemplate: true` parses the `template:` block as YAML
-  first, then substitutes into individual string values** — it does not
-  render the whole file as text first the way Helm does. You can't use
-  `{{- if }}...{{- end }}` to conditionally add or remove a whole YAML
-  key; conditionals have to live *inside* a single scalar value instead.
+  first, then substitutes into individual string values** -- it does not
+  render the whole file as text first the way Helm does. `{{- if }}...{{-
+  end }}` can't conditionally add or remove a whole YAML key; conditionals
+  have to live *inside* a single scalar value instead.
 - **Any YAML value that is entirely a `{{ ... }}` expression must be
   explicitly quoted** (`'{{ .foo }}'`), or YAML parses the leading `{` as
   the start of a flow-mapping and fails.
-- **`argocd-appset.yaml.tpl` should contain exactly one YAML document** —
-  the `ApplicationSet` only. The bootstrap RBAC/Job content belongs solely
-  in `bootstrap/argocd-token-gen/manifests.yaml`, fetched by each spoke's
-  Application, never applied directly to the management cluster.
-- **Kubernetes Jobs have an immutable pod template.** If you ever see
-  `field is immutable` from a `kubectl apply` against a Job, something is
-  trying to update one in place rather than delete-and-recreate it — check
-  for name collisions between resources meant for different clusters.
+- **The ApplicationSet CRD keeps its own, sometimes-outdated copy of the
+  Application schema.** Multi-source Applications with a named
+  `sources[].name` can hit `unknown field` errors on some ArgoCD versions
+  even though named sources work fine on real Applications -- and
+  `--validate=false` does *not* fix this, since the API server still
+  structurally prunes unknown fields from the CRD on write regardless of
+  client-side validation flags. The actual fix here was avoiding multi-source
+  entirely: a single Application source with the bootstrap Job pulled in
+  as a Helm dependency instead of a second source.
+- **Kubernetes Jobs have an immutable pod template.** `field is immutable`
+  from a `kubectl apply` against a Job means something is trying to update
+  one in place rather than delete-and-recreate it -- check for name
+  collisions between resources meant for different clusters.
+- **Splitting a combined multi-resource YAML file into one-file-per-resource
+  is easy to get subtly wrong.** A copy/paste slip left `serviceaccount.yaml`
+  containing a duplicate `RoleBinding` instead of the actual `ServiceAccount`
+  -- `helm template . | grep -A5 "kind: ServiceAccount"` caught it
+  immediately; the Kubernetes API silently never created the resource,
+  with no error, just a `FailedCreate` on whatever depended on it.
+- **Octopus releases pin an exact git commit at creation time.** Pushing
+  new commits to your repo doesn't affect an already-created release --
+  redeploying it re-runs against the same old commit. If a fix isn't
+  showing up, check whether you're redeploying a stale release rather than
+  creating a new one.
