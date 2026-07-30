@@ -8,10 +8,10 @@ description: >-
   expecting it to stick; edit via Octopus instead. values.yaml in this
   same folder is a normal git-committed file, not templated.
 type: application
-appVersion: "#{ArgoCDChartVersion}"
+appVersion: "#{Octopus.Release.Number}"
 version: 0.1.0
 
 dependencies:
   - name: argo-cd
-    version: "#{ArgoCDChartVersion}"
+    version: "#{Octopus.Release.Number}"
     repository: https://argoproj.github.io/argo-helm
