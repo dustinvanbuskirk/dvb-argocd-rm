@@ -1,0 +1,17 @@
+apiVersion: v2
+name: dvb-argocd-umbrella
+description: >-
+  Per-cluster umbrella chart wrapping the upstream argo-cd chart. This
+  file's dependency version is overwritten by Octopus's "Update Argo CD
+  Application Manifests" step on deployment (see
+  octostache-templates/Chart.yaml) -- don't hand-edit the version here
+  expecting it to stick; edit via Octopus instead. values.yaml in this
+  same folder is a normal git-committed file, not templated.
+type: application
+appVersion: "#{ArgoCDChartVersion}"
+version: 0.1.0
+
+dependencies:
+  - name: argo-cd
+    version: "#{ArgoCDChartVersion}"
+    repository: https://argoproj.github.io/argo-helm

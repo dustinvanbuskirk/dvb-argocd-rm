@@ -4,14 +4,16 @@
 # with ArgoCD's own {{.name}}/{{.server}} Go-template syntax used further
 # down, since Terraform only substitutes $${...} expressions.
 #
-# Installs ArgoCD via this repo's own argocd-umbrella-chart (which pins
-# the upstream argo-cd chart version in its Chart.yaml -- see
-# argocd-umbrella-chart/values.yaml's meta.chartVersion for the documented
-# version, and argocd-umbrella-chart/sync-chart-version.sh to propagate a
-# change into Chart.yaml). Lives on the MANAGEMENT cluster's ArgoCD (this
-# is what pushes the chart out to each spoke) -- it does not touch the
-# management cluster's own ArgoCD, which stays installed via Terraform's
-# helm_release.argocd.
+# Installs ArgoCD via a per-cluster umbrella chart at
+# argocd-versions/<cluster-name>/ in this same repo -- each cluster has its
+# own Chart.yaml (dependency version) and values.yaml (Helm values).
+# Chart.yaml is what Octopus's "Update Argo CD Application Manifests" step
+# overwrites on deployment, via an Octostache template (see
+# octostache-templates/Chart.yaml), to change the pinned argo-cd dependency
+# version -- values.yaml is a normal git-committed file, not templated.
+# Lives on the MANAGEMENT cluster's ArgoCD (this is what pushes the chart
+# out to each spoke) -- it does not touch the management cluster's own
+# ArgoCD, which stays installed via Terraform's helm_release.argocd.
 #
 # Selector: matches only cluster secrets carrying an "env" label. That's the
 # label set on the spoke cluster secrets (see kubernetes_secret.argocd_cluster
@@ -43,27 +45,16 @@ spec:
         argo.octopus.com/tenant: '{{ $parts := splitList "-" (trimPrefix "dvb-argocd-" .name) }}{{ if gt (len $parts) 1 }}{{ index $parts 1 }}{{ end }}'
     spec:
       project: default
-      # Three-source Application: source 1 installs the umbrella chart
-      # (which pulls in argo-cd as a dependency); source 2 is an unnamed-
-      # path "ref" source providing this cluster's override values file to
-      # source 1's valueFiles; source 3 deploys the RBAC + PostSync hook
+      # Two-source Application: source 1 installs this cluster's own
+      # umbrella chart (folder name = cluster name, so each Application
+      # gets a distinct path); source 2 deploys the RBAC + PostSync hook
       # Job that generates the gateway token right after ArgoCD comes up.
       sources:
         - repoURL: ${git_repo_url}
-          path: argocd-umbrella-chart
+          path: "argocd-versions/{{.name}}"
           targetRevision: main
           helm:
             releaseName: argocd
-            # Chart's own values.yaml (argocd-umbrella-chart/values.yaml)
-            # supplies the defaults automatically. This adds this cluster's
-            # override file on top -- sparse diffs only, see
-            # argocd-versions/<cluster-name>/values.yaml. Referenced via the
-            # named ref source below since it lives outside the chart path.
-            valueFiles:
-              - $cluster-values/argocd-versions/{{.name}}/values.yaml
-        - repoURL: ${git_repo_url}
-          targetRevision: main
-          ref: cluster-values
         - repoURL: ${git_repo_url}
           targetRevision: main
           path: bootstrap/argocd-token-gen
