@@ -40,19 +40,36 @@ spec:
     metadata:
       name: "argocd-{{.name}}"
       annotations:
-        argo.octopus.com/project: "ArgoCD Management"
-        argo.octopus.com/environment: '{{ index (splitList "-" (trimPrefix "dvb-argocd-" .name)) 0 }}'
-        argo.octopus.com/tenant: '{{ $parts := splitList "-" (trimPrefix "dvb-argocd-" .name) }}{{ if gt (len $parts) 1 }}{{ index $parts 1 }}{{ end }}'
+        # Multi-source Application: Octopus's scoping annotations must be
+        # suffixed with the target source's name (see
+        # https://octopus.com/docs/argo-cd/annotations#multiple-sources).
+        # Only the umbrella-chart source (name: argocd-chart-source) is
+        # scoped -- that's the only source Octopus's "Update Argo CD
+        # Application Manifests" step needs to write into. The bootstrap
+        # source is left unnamed/unannotated since Octopus never touches it.
+        #
+        # Values must be Octopus SLUGS, not display names -- confirm
+        # "argocd-management" matches your actual Octopus project's slug
+        # (visible in its URL/settings), and that each environment/tenant
+        # slug below matches what Octopus generated for your Environments
+        # (e.g. a "Production" environment's slug may not be "production"
+        # if it was renamed after creation).
+        argo.octopus.com/project.argocd-chart-source: "argocd-management"
+        argo.octopus.com/environment.argocd-chart-source: '{{ index (splitList "-" (trimPrefix "dvb-argocd-" .name)) 0 }}'
+        argo.octopus.com/tenant.argocd-chart-source: '{{ $parts := splitList "-" (trimPrefix "dvb-argocd-" .name) }}{{ if gt (len $parts) 1 }}{{ index $parts 1 }}{{ end }}'
     spec:
       project: default
       # Two-source Application: source 1 installs this cluster's own
       # umbrella chart (folder name = cluster name, so each Application
-      # gets a distinct path); source 2 deploys the RBAC + PostSync hook
-      # Job that generates the gateway token right after ArgoCD comes up.
+      # gets a distinct path) and is named so Octopus's scoping annotations
+      # above can target it specifically; source 2 deploys the RBAC +
+      # PostSync hook Job that generates the gateway token right after
+      # ArgoCD comes up, and is left unnamed since Octopus never writes to it.
       sources:
         - repoURL: ${git_repo_url}
           path: "argocd-versions/{{.name}}"
           targetRevision: main
+          name: argocd-chart-source
           helm:
             releaseName: argocd
         - repoURL: ${git_repo_url}
