@@ -1,0 +1,116 @@
+# terraform.tfvars.example
+#
+# Copy to terraform.tfvars and fill in the values marked CHANGE ME.
+# This is for the MANAGEMENT cluster root (the one running ArgoCD + the
+# Octopus gateway/agent) -- not the spoke clusters, which are registered
+# via spoke_clusters below using their own exported kubeconfigs.
+
+# ── Cluster ───────────────────────────────────────────────────────────────────
+
+# Raw kubeconfig the Vagrantfile writes for the management cluster itself.
+# With the multi-cluster Vagrantfile this lands at /vagrant/<cluster>-kubeconfig,
+# not /vagrant/kubeconfig, so adjust the path accordingly.
+kubeconfig_path = "../dvb-argocd-management-kubeconfig"
+cluster_name    = "dvb-argocd-management"
+
+# ── Octopus ───────────────────────────────────────────────────────────────────
+
+octopus_server_url  = "https://CHANGE-ME.octopus.app"          # CHANGE ME
+octopus_polling_url = "https://polling.CHANGE-ME.octopus.app"  # CHANGE ME
+octopus_grpc_url    = "grpcs://CHANGE-ME.octopus.app:443"      # CHANGE ME
+octopus_api_key     = "API-CHANGEMECHANGEMECHANGEME"           # CHANGE ME -- keep out of source control
+octopus_space_name  = "Default"
+
+# ── Octopus Worker ────────────────────────────────────────────────────────────
+
+install_octopus_worker  = true
+octopus_worker_pool_name = "Vagrant K8s Workers"
+create_worker_pool       = true
+octopus_worker_count     = 2
+
+# ── Octopus Kubernetes Agent (deployment target) ──────────────────────────────
+
+install_octopus_agent           = true
+octopus_agent_namespace         = "octopus-agent"
+octopus_agent_environments      = ["Development", "Test", "Production"]
+octopus_agent_tags              = ["kubernetes", "dvb-argocd-management"]
+octopus_agent_default_namespace = "default"
+
+octopus_agent_k8s_monitor_enabled  = false
+octopus_agent_k8s_monitor_grpc_url = ""  # only needed if k8s_monitor_enabled = true
+
+octopus_agent_cpu_request    = "250m"
+octopus_agent_memory_request = "512Mi"
+octopus_agent_cpu_limit      = "500m"
+octopus_agent_memory_limit   = "1Gi"
+
+# ── Octopus ArgoCD Gateway ────────────────────────────────────────────────────
+
+install_octopus_gateway       = true  # requires install_argocd = true below
+octopus_gateway_namespace     = "octopus-argocd-gateway"
+octopus_gateway_chart_version = "1.21.0"
+octopus_gateway_service_type  = "ClusterIP"
+octopus_gateway_port          = 8080
+
+# ── NFS CSI (optional) ────────────────────────────────────────────────────────
+
+install_nfs_csi_driver = false
+nfs_server             = ""  # e.g. "10.20.10.1" if serving NFS from the host
+nfs_share_path         = "/"
+nfs_storage_class_name = "nfs-csi-storageclass"
+
+# ── ArgoCD (optional) ─────────────────────────────────────────────────────────
+
+install_argocd       = true
+argocd_chart_version = "7.7.9"
+argocd_namespace     = "argocd"
+argocd_web_ui_url    = "http://localhost:8080"  # via kubectl port-forward, or your NodePort/ingress URL
+
+# ── Argo Rollouts (optional) ──────────────────────────────────────────────────
+
+install_argo_rollouts       = false
+argo_rollouts_chart_version = "2.37.7"
+
+# ── Git repo / ArgoCD repo credential ─────────────────────────────────────────
+#
+# The ONLY two values that change when someone forks this repo. Nothing
+# else in this project needs hand-editing to point at a fork.
+
+git_repo_url     = "https://github.com/CHANGE-ME/dvb-argocd-rm.git"  # CHANGE ME -- your fork's URL
+github_username     = "username"  # CHANGE ME -- keep out of source control
+github_api_token = "ghp_CHANGEMECHANGEMECHANGEMECHANGEME"            # CHANGE ME -- keep out of source control
+
+# ── ArgoCD spoke cluster registration ─────────────────────────────────────────
+#
+# kubeconfig_path/context values match the renamed exports the Vagrantfile
+# writes to /vagrant/kubeconfigs/<cluster-name>.conf, with contexts renamed
+# to "<cluster-name>-admin@<cluster-name>". Adjust paths to wherever this
+# Terraform root sits relative to that folder.
+
+spoke_clusters = {
+  "dvb-argocd-development" = {
+    kubeconfig_path    = "../kubeconfigs/dvb-argocd-development.conf"
+    kubeconfig_context = "dvb-argocd-development-admin@dvb-argocd-development"
+    labels             = { env = "development" }
+  }
+  "dvb-argocd-staging" = {
+    kubeconfig_path    = "../kubeconfigs/dvb-argocd-staging.conf"
+    kubeconfig_context = "dvb-argocd-staging-admin@dvb-argocd-staging"
+    labels             = { env = "staging" }
+  }
+  "dvb-argocd-production-east" = {
+    kubeconfig_path    = "../kubeconfigs/dvb-argocd-production-east.conf"
+    kubeconfig_context = "dvb-argocd-production-east-admin@dvb-argocd-production-east"
+    labels             = { env = "production", region = "east" }
+  }
+  "dvb-argocd-production-central" = {
+    kubeconfig_path    = "../kubeconfigs/dvb-argocd-production-central.conf"
+    kubeconfig_context = "dvb-argocd-production-central-admin@dvb-argocd-production-central"
+    labels             = { env = "production", region = "central" }
+  }
+  "dvb-argocd-production-west" = {
+    kubeconfig_path    = "../kubeconfigs/dvb-argocd-production-west.conf"
+    kubeconfig_context = "dvb-argocd-production-west-admin@dvb-argocd-production-west"
+    labels             = { env = "production", region = "west" }
+  }
+}

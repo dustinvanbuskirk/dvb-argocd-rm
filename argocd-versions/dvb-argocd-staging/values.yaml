@@ -1,0 +1,10 @@
+# Read by argocd-spoke-install-appset.yaml's git files generator for this
+# specific cluster (path: argocd-versions/<cluster-name>/values.yaml).
+#
+# This file, not the ApplicationSet or the live Application, is what should
+# get edited to promote a new ArgoCD chart version to this cluster -- e.g.
+# via Octopus's "Update Argo CD Application Manifests" step, or a plain PR.
+# Editing the ApplicationSet's hardcoded value would affect every cluster
+# at once and defeats the point of this file existing.
+
+targetRevision: "7.7.9"

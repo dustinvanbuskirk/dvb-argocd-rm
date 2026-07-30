@@ -1,0 +1,6 @@
+.vagrant/
+*kubeconfig
+join-commands/
+kubeconfigs/
+logs/
+worker-tracking/
