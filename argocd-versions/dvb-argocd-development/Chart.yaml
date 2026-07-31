@@ -10,12 +10,12 @@ description: >-
   The argocd-token-gen dependency stays static -- its version isn't
   driven by Octopus, since it isn't the thing being promoted.
 type: application
-appVersion: "9.5.22"
+appVersion: "9.6.0"
 version: 0.1.0
 
 dependencies:
   - name: argo-cd
-    version: "9.5.22"
+    version: "9.6.0"
     repository: https://argoproj.github.io/argo-helm
   - name: argocd-token-gen
     version: "0.1.0"
