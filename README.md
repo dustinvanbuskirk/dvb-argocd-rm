@@ -396,6 +396,50 @@ match your real Octopus project/environment/tenant **slugs** (visible in
 each one's URL/Settings), not their display names; slugs don't always
 follow the obvious lowercase-hyphenate pattern, especially after a rename.
 
+## Octopus Deploy as the control plane over ArgoCD
+
+The result of the flow above is that **Octopus, not ArgoCD's own UI, is
+where you decide and observe what version is running where.** ArgoCD
+still does all the actual GitOps syncing -- Octopus just sits on top of it
+as a release/promotion control plane, using its normal
+Project/Environment/Tenant model mapped onto the scoping annotations
+above.
+
+The **Project Dashboard** shows every cluster's live ArgoCD version at a
+glance, organized exactly like any other Octopus deployment: environments
+across the top, tenants down the side, an "Untenanted" row for
+`development`/`staging` (which have no regional tenant), and a
+`central`/`east`/`west` row per tenant for `production`:
+
+![Octopus project dashboard showing live ArgoCD versions per environment and tenant](docs/images/octopus-project-dashboard.png)
+
+Mid-deployment, the same view shows a release actively rolling out (spinner
++ timestamp instead of a static version number) alongside clusters that are
+already settled:
+
+![Octopus project dashboard with a deployment in progress to Development](docs/images/octopus-project-dashboard-deploying.png)
+
+Drilling into a specific environment/tenant's **Live Status** view surfaces
+the actual Kubernetes resources ArgoCD is managing on that cluster --
+pulled through the Octopus ArgoCD Gateway, not screen-scraped -- including
+the underlying `Application` resource, its sync/health status, and the
+full resource tree (CRDs, ServiceAccounts, the application-controller
+StatefulSet, RBAC, etc.):
+
+![Octopus live status detail for Staging, showing the ArgoCD Application and its resource tree](docs/images/octopus-staging-live-status.png)
+
+For comparison, this is the same set of clusters from ArgoCD's own UI --
+five `Application` objects, one per spoke, each sourced from
+`argocd-versions/<cluster-name>` in this repo:
+
+![ArgoCD's own Applications List UI showing all 5 spoke Applications](docs/images/argocd-applications-list.png)
+
+The practical takeaway: day-to-day version promotion happens by creating
+and deploying an Octopus release through its normal Environment/Tenant
+lifecycle (Development → Staging → Production/central/east/west) --
+ArgoCD's UI is for verifying sync health and debugging, not for deciding
+what gets deployed where.
+
 ## Getting cross-cluster `kubectl` access
 
 Each control-plane exports a renamed kubeconfig to `kubeconfigs/<cluster>.conf`
