@@ -14,6 +14,10 @@ application, it takes down your ability to ship *anything* to that
 cluster. The component with the largest blast radius in your entire
 platform is routinely the one with the least process around changing it.
 
+A recent example is the upgrade to ArgoCD v3.4, which introduces a 
+breaking change in how Kubernetes cluster versions are reported, 
+from Major.Minor to vMajor.Minor.Patch.
+
 This is a prototype for closing that gap: a fleet of clusters where
 ArgoCD upgrades itself declaratively across every environment, and
 Octopus Deploy governs *when* and *where* each version rolls out, using
